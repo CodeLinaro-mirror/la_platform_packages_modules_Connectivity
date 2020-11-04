@@ -142,6 +142,9 @@ public class TetheringConfiguration {
 
     private final boolean mEnableSelectAllPrefixRange;
 
+    // Dun is required no matter dun APN is available or not.
+    private final boolean mDunPreferred;
+
     public TetheringConfiguration(Context ctx, SharedLog log, int id) {
         final SharedLog configLog = log.forSubComponent("config");
 
@@ -160,7 +163,10 @@ public class TetheringConfiguration {
         tetherableBluetoothRegexs = getResourceStringArray(
                 res, R.array.config_tether_bluetooth_regexs);
 
-        isDunRequired = checkDunRequired(ctx);
+        mDunPreferred = getResourceBoolean(res,
+                R.bool.config_tether_enable_dun_preferred, false /* defaultValue */);
+
+        isDunRequired = mDunPreferred ? true : checkDunRequired(ctx);
 
         final boolean forceAutomaticUpstream = !SdkLevel.isAtLeastS()
                 && isFeatureEnabled(ctx, TETHER_FORCE_UPSTREAM_AUTOMATIC_VERSION);
@@ -256,6 +262,8 @@ public class TetheringConfiguration {
 
         pw.print("isDunRequired: ");
         pw.println(isDunRequired);
+        pw.print("mDunPreferred");
+        pw.println(mDunPreferred);
 
         pw.print("chooseUpstreamAutomatically: ");
         pw.println(chooseUpstreamAutomatically);
