@@ -58,6 +58,8 @@ public class TetheringConfiguration {
 
     private static final String[] EMPTY_STRING_ARRAY = new String[0];
 
+    private static final String TETHERING_MODULE_NAME = "com.android.tethering";
+
     // Default ranges used for the legacy DHCP server.
     // USB is  192.168.42.1 and 255.255.255.0
     // Wifi is 192.168.43.1 and 255.255.255.0
@@ -481,7 +483,8 @@ public class TetheringConfiguration {
 
     @VisibleForTesting
     protected boolean isFeatureEnabled(Context ctx, String featureVersionFlag) {
-        return DeviceConfigUtils.isFeatureEnabled(ctx, NAMESPACE_CONNECTIVITY, featureVersionFlag);
+        return DeviceConfigUtils.isFeatureEnabled(ctx, NAMESPACE_CONNECTIVITY, featureVersionFlag,
+                TETHERING_MODULE_NAME, false /* defaultEnabled */);
     }
 
     private Resources getResources(Context ctx, int subId) {
