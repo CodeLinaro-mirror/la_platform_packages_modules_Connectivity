@@ -9,6 +9,9 @@
       "options": [
         {
           "exclude-annotation": "com.android.testutils.SkipPresubmit"
+        },
+        {
+          "exclude-annotation": "androidx.test.filters.RequiresDevice"
         }
       ]
     },
@@ -31,6 +34,9 @@
       "options": [
         {
           "exclude-annotation": "com.android.testutils.SkipPresubmit"
+        },
+        {
+          "exclude-annotation": "androidx.test.filters.RequiresDevice"
         }
       ]
     },
