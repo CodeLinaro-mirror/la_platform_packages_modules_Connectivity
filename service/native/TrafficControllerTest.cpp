@@ -36,6 +36,7 @@
 
 #include <netdutils/MockSyscalls.h>
 
+#define TEST_BPF_MAP
 #include "TrafficController.h"
 #include "bpf/BpfUtils.h"
 #include "NetdUpdatablePublic.h"
@@ -65,7 +66,7 @@ class TrafficControllerTest : public ::testing::Test {
     BpfMap<uint64_t, UidTagValue> mFakeCookieTagMap;
     BpfMap<uint32_t, StatsValue> mFakeAppUidStatsMap;
     BpfMap<StatsKey, StatsValue> mFakeStatsMapA;
-    BpfMap<uint32_t, uint8_t> mFakeConfigurationMap;
+    BpfMap<uint32_t, uint32_t> mFakeConfigurationMap;
     BpfMap<uint32_t, UidOwnerValue> mFakeUidOwnerMap;
     BpfMap<uint32_t, uint8_t> mFakeUidPermissionMap;
 
@@ -73,50 +74,40 @@ class TrafficControllerTest : public ::testing::Test {
         std::lock_guard guard(mTc.mMutex);
         ASSERT_EQ(0, setrlimitForTest());
 
-        mFakeCookieTagMap.reset(createMap(BPF_MAP_TYPE_HASH, sizeof(uint64_t), sizeof(UidTagValue),
-                                          TEST_MAP_SIZE, 0));
+        mFakeCookieTagMap.resetMap(BPF_MAP_TYPE_HASH, TEST_MAP_SIZE);
         ASSERT_VALID(mFakeCookieTagMap);
 
-        mFakeAppUidStatsMap.reset(createMap(BPF_MAP_TYPE_HASH, sizeof(uint32_t), sizeof(StatsValue),
-                                            TEST_MAP_SIZE, 0));
+        mFakeAppUidStatsMap.resetMap(BPF_MAP_TYPE_HASH, TEST_MAP_SIZE);
         ASSERT_VALID(mFakeAppUidStatsMap);
 
-        mFakeStatsMapA.reset(createMap(BPF_MAP_TYPE_HASH, sizeof(StatsKey), sizeof(StatsValue),
-                                       TEST_MAP_SIZE, 0));
+        mFakeStatsMapA.resetMap(BPF_MAP_TYPE_HASH, TEST_MAP_SIZE);
         ASSERT_VALID(mFakeStatsMapA);
 
-        mFakeConfigurationMap.reset(
-                createMap(BPF_MAP_TYPE_HASH, sizeof(uint32_t), sizeof(uint8_t), 1, 0));
+        mFakeConfigurationMap.resetMap(BPF_MAP_TYPE_HASH, 1);
         ASSERT_VALID(mFakeConfigurationMap);
 
-        mFakeUidOwnerMap.reset(createMap(BPF_MAP_TYPE_HASH, sizeof(uint32_t), sizeof(UidOwnerValue),
-                                         TEST_MAP_SIZE, 0));
+        mFakeUidOwnerMap.resetMap(BPF_MAP_TYPE_HASH, TEST_MAP_SIZE);
         ASSERT_VALID(mFakeUidOwnerMap);
-        mFakeUidPermissionMap.reset(
-                createMap(BPF_MAP_TYPE_HASH, sizeof(uint32_t), sizeof(uint8_t), TEST_MAP_SIZE, 0));
+        mFakeUidPermissionMap.resetMap(BPF_MAP_TYPE_HASH, TEST_MAP_SIZE);
         ASSERT_VALID(mFakeUidPermissionMap);
 
-        mTc.mCookieTagMap.reset(dupFd(mFakeCookieTagMap.getMap()));
+        mTc.mCookieTagMap = mFakeCookieTagMap;
         ASSERT_VALID(mTc.mCookieTagMap);
-        mTc.mAppUidStatsMap.reset(dupFd(mFakeAppUidStatsMap.getMap()));
+        mTc.mAppUidStatsMap = mFakeAppUidStatsMap;
         ASSERT_VALID(mTc.mAppUidStatsMap);
-        mTc.mStatsMapA.reset(dupFd(mFakeStatsMapA.getMap()));
+        mTc.mStatsMapA = mFakeStatsMapA;
         ASSERT_VALID(mTc.mStatsMapA);
-        mTc.mConfigurationMap.reset(dupFd(mFakeConfigurationMap.getMap()));
+        mTc.mConfigurationMap = mFakeConfigurationMap;
         ASSERT_VALID(mTc.mConfigurationMap);
 
         // Always write to stats map A by default.
         ASSERT_RESULT_OK(mTc.mConfigurationMap.writeValue(CURRENT_STATS_MAP_CONFIGURATION_KEY,
                                                           SELECT_MAP_A, BPF_ANY));
-        mTc.mUidOwnerMap.reset(dupFd(mFakeUidOwnerMap.getMap()));
+        mTc.mUidOwnerMap = mFakeUidOwnerMap;
         ASSERT_VALID(mTc.mUidOwnerMap);
-        mTc.mUidPermissionMap.reset(dupFd(mFakeUidPermissionMap.getMap()));
+        mTc.mUidPermissionMap = mFakeUidPermissionMap;
         ASSERT_VALID(mTc.mUidPermissionMap);
         mTc.mPrivilegedUser.clear();
-    }
-
-    int dupFd(const android::base::unique_fd& mapFd) {
-        return fcntl(mapFd.get(), F_DUPFD_CLOEXEC, 0);
     }
 
     void populateFakeStats(uint64_t cookie, uint32_t uid, uint32_t tag, StatsKey* key) {
@@ -307,6 +298,10 @@ TEST_F(TrafficControllerTest, TestChangeUidOwnerRule) {
     checkUidOwnerRuleForChain(POWERSAVE, POWERSAVE_MATCH);
     checkUidOwnerRuleForChain(RESTRICTED, RESTRICTED_MATCH);
     checkUidOwnerRuleForChain(LOW_POWER_STANDBY, LOW_POWER_STANDBY_MATCH);
+    checkUidOwnerRuleForChain(LOCKDOWN, LOCKDOWN_VPN_MATCH);
+    checkUidOwnerRuleForChain(OEM_DENY_1, OEM_DENY_1_MATCH);
+    checkUidOwnerRuleForChain(OEM_DENY_2, OEM_DENY_2_MATCH);
+    checkUidOwnerRuleForChain(OEM_DENY_3, OEM_DENY_3_MATCH);
     ASSERT_EQ(-EINVAL, mTc.changeUidOwnerRule(NONE, TEST_UID, ALLOW, ALLOWLIST));
     ASSERT_EQ(-EINVAL, mTc.changeUidOwnerRule(INVALID_CHAIN, TEST_UID, ALLOW, ALLOWLIST));
 }
@@ -318,6 +313,9 @@ TEST_F(TrafficControllerTest, TestReplaceUidOwnerMap) {
     checkUidMapReplace("fw_powersave", uids, POWERSAVE_MATCH);
     checkUidMapReplace("fw_restricted", uids, RESTRICTED_MATCH);
     checkUidMapReplace("fw_low_power_standby", uids, LOW_POWER_STANDBY_MATCH);
+    checkUidMapReplace("fw_oem_deny_1", uids, OEM_DENY_1_MATCH);
+    checkUidMapReplace("fw_oem_deny_2", uids, OEM_DENY_2_MATCH);
+    checkUidMapReplace("fw_oem_deny_3", uids, OEM_DENY_3_MATCH);
     ASSERT_EQ(-EINVAL, mTc.replaceUidOwnerMap("unknow", true, uids));
 }
 
@@ -491,6 +489,70 @@ TEST_F(TrafficControllerTest, TestUidInterfaceFilteringRulesCoexistWithNewMatche
     checkEachUidValue({10001, 10002}, IIF_MATCH);
 }
 
+TEST_F(TrafficControllerTest, TestAddUidInterfaceFilteringRulesWithWildcard) {
+    // iif=0 is a wildcard
+    int iif = 0;
+    // Add interface rule with wildcard to uids
+    ASSERT_TRUE(isOk(mTc.addUidInterfaceRules(iif, {1000, 1001})));
+    expectUidOwnerMapValues({1000, 1001}, IIF_MATCH, iif);
+}
+
+TEST_F(TrafficControllerTest, TestRemoveUidInterfaceFilteringRulesWithWildcard) {
+    // iif=0 is a wildcard
+    int iif = 0;
+    // Add interface rule with wildcard to two uids
+    ASSERT_TRUE(isOk(mTc.addUidInterfaceRules(iif, {1000, 1001})));
+    expectUidOwnerMapValues({1000, 1001}, IIF_MATCH, iif);
+
+    // Remove interface rule from one of the uids
+    ASSERT_TRUE(isOk(mTc.removeUidInterfaceRules({1000})));
+    expectUidOwnerMapValues({1001}, IIF_MATCH, iif);
+    checkEachUidValue({1001}, IIF_MATCH);
+
+    // Remove interface rule from the remaining uid
+    ASSERT_TRUE(isOk(mTc.removeUidInterfaceRules({1001})));
+    expectMapEmpty(mFakeUidOwnerMap);
+}
+
+TEST_F(TrafficControllerTest, TestUidInterfaceFilteringRulesWithWildcardAndExistingMatches) {
+    // Set up existing DOZABLE_MATCH and POWERSAVE_MATCH rule
+    ASSERT_TRUE(isOk(updateUidOwnerMaps({1000}, DOZABLE_MATCH,
+                                        TrafficController::IptOpInsert)));
+    ASSERT_TRUE(isOk(updateUidOwnerMaps({1000}, POWERSAVE_MATCH,
+                                        TrafficController::IptOpInsert)));
+
+    // iif=0 is a wildcard
+    int iif = 0;
+    // Add interface rule with wildcard to the existing uid
+    ASSERT_TRUE(isOk(mTc.addUidInterfaceRules(iif, {1000})));
+    expectUidOwnerMapValues({1000}, POWERSAVE_MATCH | DOZABLE_MATCH | IIF_MATCH, iif);
+
+    // Remove interface rule with wildcard from the existing uid
+    ASSERT_TRUE(isOk(mTc.removeUidInterfaceRules({1000})));
+    expectUidOwnerMapValues({1000}, POWERSAVE_MATCH | DOZABLE_MATCH, 0);
+}
+
+TEST_F(TrafficControllerTest, TestUidInterfaceFilteringRulesWithWildcardAndNewMatches) {
+    // iif=0 is a wildcard
+    int iif = 0;
+    // Set up existing interface rule with wildcard
+    ASSERT_TRUE(isOk(mTc.addUidInterfaceRules(iif, {1000})));
+
+    // Add DOZABLE_MATCH and POWERSAVE_MATCH rule to the existing uid
+    ASSERT_TRUE(isOk(updateUidOwnerMaps({1000}, DOZABLE_MATCH,
+                                        TrafficController::IptOpInsert)));
+    ASSERT_TRUE(isOk(updateUidOwnerMaps({1000}, POWERSAVE_MATCH,
+                                        TrafficController::IptOpInsert)));
+    expectUidOwnerMapValues({1000}, POWERSAVE_MATCH | DOZABLE_MATCH | IIF_MATCH, iif);
+
+    // Remove DOZABLE_MATCH and POWERSAVE_MATCH rule from the existing uid
+    ASSERT_TRUE(isOk(updateUidOwnerMaps({1000}, DOZABLE_MATCH,
+                                        TrafficController::IptOpDelete)));
+    ASSERT_TRUE(isOk(updateUidOwnerMaps({1000}, POWERSAVE_MATCH,
+                                        TrafficController::IptOpDelete)));
+    expectUidOwnerMapValues({1000}, IIF_MATCH, iif);
+}
+
 TEST_F(TrafficControllerTest, TestGrantInternetPermission) {
     std::vector<uid_t> appUids = {TEST_UID, TEST_UID2, TEST_UID3};
 
@@ -608,7 +670,7 @@ class NetlinkListenerTest : public testing::Test {
     BpfMap<uint64_t, UidTagValue> mCookieTagMap;
 
     void SetUp() {
-        mCookieTagMap.reset(android::bpf::mapRetrieveRW(COOKIE_TAG_MAP_PATH));
+        mCookieTagMap.init(COOKIE_TAG_MAP_PATH);
         ASSERT_TRUE(mCookieTagMap.isValid());
     }
 

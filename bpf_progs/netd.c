@@ -14,6 +14,9 @@
  * limitations under the License.
  */
 
+// The resulting .o needs to load on the Android T Beta 3 bpfloader v0.13+
+#define BPFLOADER_MIN_VER 13u
+
 #include <bpf_helpers.h>
 #include <linux/bpf.h>
 #include <linux/if.h>
@@ -59,7 +62,7 @@ DEFINE_BPF_MAP_GRW(stats_map_A, HASH, StatsKey, StatsValue, STATS_MAP_SIZE, AID_
 DEFINE_BPF_MAP_GRW(stats_map_B, HASH, StatsKey, StatsValue, STATS_MAP_SIZE, AID_NET_BW_ACCT)
 DEFINE_BPF_MAP_GRW(iface_stats_map, HASH, uint32_t, StatsValue, IFACE_STATS_MAP_SIZE,
                    AID_NET_BW_ACCT)
-DEFINE_BPF_MAP_GRW(configuration_map, HASH, uint32_t, uint8_t, CONFIGURATION_MAP_SIZE,
+DEFINE_BPF_MAP_GRW(configuration_map, HASH, uint32_t, uint32_t, CONFIGURATION_MAP_SIZE,
                    AID_NET_BW_ACCT)
 DEFINE_BPF_MAP_GRW(uid_owner_map, HASH, uint32_t, UidOwnerValue, UID_OWNER_MAP_SIZE,
                    AID_NET_BW_ACCT)
@@ -194,7 +197,7 @@ static inline int bpf_owner_match(struct __sk_buff* skb, uint32_t uid, int direc
     BpfConfig enabledRules = getConfig(UID_RULES_CONFIGURATION_KEY);
 
     UidOwnerValue* uidEntry = bpf_uid_owner_map_lookup_elem(&uid);
-    uint8_t uidRules = uidEntry ? uidEntry->rule : 0;
+    uint32_t uidRules = uidEntry ? uidEntry->rule : 0;
     uint32_t allowed_iif = uidEntry ? uidEntry->iif : 0;
 
     if (enabledRules) {
@@ -213,10 +216,26 @@ static inline int bpf_owner_match(struct __sk_buff* skb, uint32_t uid, int direc
         if ((enabledRules & LOW_POWER_STANDBY_MATCH) && !(uidRules & LOW_POWER_STANDBY_MATCH)) {
             return BPF_DROP;
         }
+        if ((enabledRules & OEM_DENY_1_MATCH) && (uidRules & OEM_DENY_1_MATCH)) {
+            return BPF_DROP;
+        }
+        if ((enabledRules & OEM_DENY_2_MATCH) && (uidRules & OEM_DENY_2_MATCH)) {
+            return BPF_DROP;
+        }
+        if ((enabledRules & OEM_DENY_3_MATCH) && (uidRules & OEM_DENY_3_MATCH)) {
+            return BPF_DROP;
+        }
     }
-    if (direction == BPF_INGRESS && (uidRules & IIF_MATCH)) {
-        // Drops packets not coming from lo nor the allowlisted interface
-        if (allowed_iif && skb->ifindex != 1 && skb->ifindex != allowed_iif) {
+    if (direction == BPF_INGRESS && skb->ifindex != 1) {
+        if (uidRules & IIF_MATCH) {
+            if (allowed_iif && skb->ifindex != allowed_iif) {
+                // Drops packets not coming from lo nor the allowed interface
+                // allowed interface=0 is a wildcard and does not drop packets
+                return BPF_DROP_UNLESS_DNS;
+            }
+        } else if (uidRules & LOCKDOWN_VPN_MATCH) {
+            // Drops packets not coming from lo and rule does not have IIF_MATCH but has
+            // LOCKDOWN_VPN_MATCH
             return BPF_DROP_UNLESS_DNS;
         }
     }
@@ -224,7 +243,7 @@ static inline int bpf_owner_match(struct __sk_buff* skb, uint32_t uid, int direc
 }
 
 static __always_inline inline void update_stats_with_config(struct __sk_buff* skb, int direction,
-                                                            StatsKey* key, uint8_t selectedMap) {
+                                                            StatsKey* key, uint32_t selectedMap) {
     if (selectedMap == SELECT_MAP_A) {
         update_stats_map_A(skb, direction, key);
     } else if (selectedMap == SELECT_MAP_B) {
@@ -276,7 +295,7 @@ static __always_inline inline int bpf_traffic_account(struct __sk_buff* skb, int
     if (counterSet) key.counterSet = (uint32_t)*counterSet;
 
     uint32_t mapSettingKey = CURRENT_STATS_MAP_CONFIGURATION_KEY;
-    uint8_t* selectedMap = bpf_configuration_map_lookup_elem(&mapSettingKey);
+    uint32_t* selectedMap = bpf_configuration_map_lookup_elem(&mapSettingKey);
 
     // Use asm("%0 &= 1" : "+r"(match)) before return match,
     // to help kernel's bpf verifier, so that it can be 100% certain
