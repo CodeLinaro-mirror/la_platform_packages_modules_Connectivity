@@ -40,6 +40,8 @@ import static android.net.TetheringManager.TETHERING_INVALID;
 import static android.net.TetheringManager.TETHERING_NCM;
 import static android.net.TetheringManager.TETHERING_USB;
 import static android.net.TetheringManager.TETHERING_WIFI;
+import static android.net.TetheringManager.TETHERING_LOCAL_HOTSPOT_PRIMARY;
+import static android.net.TetheringManager.TETHERING_LOCAL_HOTSPOT_SECONDARY;
 import static android.net.TetheringManager.TETHERING_WIFI_P2P;
 import static android.net.TetheringManager.TETHERING_WIGIG;
 import static android.net.TetheringManager.TETHER_ERROR_INTERNAL_ERROR;
@@ -60,6 +62,10 @@ import static android.net.wifi.WifiManager.IFACE_IP_MODE_CONFIGURATION_ERROR;
 import static android.net.wifi.WifiManager.IFACE_IP_MODE_LOCAL_ONLY;
 import static android.net.wifi.WifiManager.IFACE_IP_MODE_TETHERED;
 import static android.net.wifi.WifiManager.IFACE_IP_MODE_UNSPECIFIED;
+import static android.net.wifi.WifiManager.LOCAL_ONLY_HOTSPOT_TYPE_NONE;
+import static android.net.wifi.WifiManager.LOCAL_ONLY_HOTSPOT_TYPE_PRIMARY;
+import static android.net.wifi.WifiManager.LOCAL_ONLY_HOTSPOT_TYPE_SECONDARY;
+import static android.net.wifi.WifiManager.EXTRA_WIFI_LOHS_TYPE;
 import static android.net.wifi.WifiManager.WIFI_AP_STATE_DISABLED;
 import static android.telephony.CarrierConfigManager.ACTION_CARRIER_CONFIG_CHANGED;
 import static android.telephony.SubscriptionManager.INVALID_SUBSCRIPTION_ID;
@@ -530,7 +536,9 @@ public class Tethering {
         // Do not listen to USB interface state changes or USB interface add/removes. USB tethering
         // is driven only by USB_ACTION broadcasts.
         final int type = ifaceNameToType(iface);
-        if (type == TETHERING_USB || type == TETHERING_NCM) return;
+        if (type == TETHERING_USB || type == TETHERING_NCM || type == TETHERING_WIFI ||
+                type == TETHERING_LOCAL_HOTSPOT_PRIMARY ||
+                type == TETHERING_LOCAL_HOTSPOT_SECONDARY) return;
 
         if (enabled) {
             ensureIpServerStarted(iface);
@@ -843,6 +851,8 @@ public class Tethering {
 
     void untetherAll() {
         stopTethering(TETHERING_WIFI);
+        stopTethering(TETHERING_LOCAL_HOTSPOT_PRIMARY);
+        stopTethering(TETHERING_LOCAL_HOTSPOT_SECONDARY);
         stopTethering(TETHERING_WIFI_P2P);
         stopTethering(TETHERING_USB);
         stopTethering(TETHERING_BLUETOOTH);
@@ -1108,13 +1118,15 @@ public class Tethering {
             final int curState = intent.getIntExtra(EXTRA_WIFI_AP_STATE, WIFI_AP_STATE_DISABLED);
             final String ifname = intent.getStringExtra(EXTRA_WIFI_AP_INTERFACE_NAME);
             final int ipmode = intent.getIntExtra(EXTRA_WIFI_AP_MODE, IFACE_IP_MODE_UNSPECIFIED);
+            final int lohsType = intent.getIntExtra(EXTRA_WIFI_LOHS_TYPE,
+                    LOCAL_ONLY_HOTSPOT_TYPE_NONE);
 
             switch (curState) {
                 case WifiManager.WIFI_AP_STATE_ENABLING:
                     // We can see this state on the way to both enabled and failure states.
                     break;
                 case WifiManager.WIFI_AP_STATE_ENABLED:
-                    enableWifiIpServing(ifname, ipmode);
+                    enableWifiIpServing(ifname, ipmode, lohsType);
                     break;
                 case WifiManager.WIFI_AP_STATE_DISABLING:
                     // We can see this state on the way to disabled.
@@ -1122,7 +1134,7 @@ public class Tethering {
                 case WifiManager.WIFI_AP_STATE_DISABLED:
                 case WifiManager.WIFI_AP_STATE_FAILED:
                 default:
-                    disableWifiIpServing(ifname, curState);
+                    disableWifiIpServing(ifname, ipmode);
                     break;
             }
         }
@@ -1167,7 +1179,8 @@ public class Tethering {
 
             // Finally bring up serving on the new interface
             mWifiP2pTetherInterface = group.getInterface();
-            enableWifiIpServing(mWifiP2pTetherInterface, IFACE_IP_MODE_LOCAL_ONLY);
+            enableWifiIpServing(mWifiP2pTetherInterface, IFACE_IP_MODE_LOCAL_ONLY,
+                    LOCAL_ONLY_HOTSPOT_TYPE_NONE);
         }
 
         private void handleUserRestrictionAction() {
@@ -1258,11 +1271,9 @@ public class Tethering {
         changeInterfaceState(ifname, ipServingMode);
     }
 
-    private void disableWifiIpServingCommon(int tetheringType, String ifname, int apState) {
+    private void disableWifiIpServingCommon(String ifname) {
         mLog.log("Canceling WiFi tethering request -"
-                + " type=" + tetheringType
-                + " interface=" + ifname
-                + " state=" + apState);
+                + " interface=" + ifname);
 
         if (!TextUtils.isEmpty(ifname)) {
             final TetherState ts = mTetherStates.get(ifname);
@@ -1274,7 +1285,7 @@ public class Tethering {
 
         for (int i = 0; i < mTetherStates.size(); i++) {
             final IpServer ipServer = mTetherStates.valueAt(i).ipServer;
-            if (ipServer.interfaceType() == tetheringType) {
+            if (ipServer.interfaceName() == ifname) {
                 ipServer.unwanted();
                 return;
             }
@@ -1285,32 +1296,42 @@ public class Tethering {
                                            : "specified interface: " + ifname));
     }
 
-    private void disableWifiIpServing(String ifname, int apState) {
+    private void disableWifiIpServing(String ifname, int wifiIpMode) {
         // Regardless of whether we requested this transition, the AP has gone
         // down.  Don't try to tether again unless we're requested to do so.
         // TODO: Remove this altogether, once Wi-Fi reliably gives us an
         // interface name with every broadcast.
-        mWifiTetherRequested = false;
-
-        disableWifiIpServingCommon(TETHERING_WIFI, ifname, apState);
+        if(wifiIpMode == IFACE_IP_MODE_TETHERED){
+            mWifiTetherRequested = false;
+        }
+        disableWifiIpServingCommon(ifname);
     }
 
     private void disableWifiP2pIpServingIfNeeded(String ifname) {
         if (TextUtils.isEmpty(ifname)) return;
 
-        disableWifiIpServingCommon(TETHERING_WIFI_P2P, ifname, /* fake */ 0);
+        disableWifiIpServingCommon(ifname);
     }
 
-    private void enableWifiIpServing(String ifname, int wifiIpMode) {
+    private void enableWifiIpServing(String ifname, int wifiIpMode, int lohsModeType) {
         // Map wifiIpMode values to IpServer.Callback serving states, inferring
         // from mWifiTetherRequested as a final "best guess".
         final int ipServingMode;
+        int type = TETHERING_INVALID;
         switch (wifiIpMode) {
             case IFACE_IP_MODE_TETHERED:
                 ipServingMode = IpServer.STATE_TETHERED;
+                type = TETHERING_WIFI;
                 break;
             case IFACE_IP_MODE_LOCAL_ONLY:
                 ipServingMode = IpServer.STATE_LOCAL_ONLY;
+                if (lohsModeType == LOCAL_ONLY_HOTSPOT_TYPE_PRIMARY) {
+                    type = TETHERING_LOCAL_HOTSPOT_PRIMARY;
+                } else if (lohsModeType == LOCAL_ONLY_HOTSPOT_TYPE_SECONDARY) {
+                    type = TETHERING_LOCAL_HOTSPOT_SECONDARY;
+                } else {
+                    type = TETHERING_WIFI_P2P;
+                }
                 break;
             default:
                 mLog.e("Cannot enable IP serving in unknown WiFi mode: " + wifiIpMode);
@@ -1318,8 +1339,7 @@ public class Tethering {
         }
 
         if (!TextUtils.isEmpty(ifname)) {
-            ensureIpServerStarted(ifname);
-            changeInterfaceState(ifname, ipServingMode);
+            enableIpServing(type, ifname, ipServingMode);
         } else {
             mLog.e(String.format(
                     "Cannot enable IP serving in mode %s on missing interface name",
@@ -1764,7 +1784,9 @@ public class Tethering {
             }
 
             // If this is a Wi-Fi interface, notify WifiManager of the active serving state.
-            if (who.interfaceType() == TETHERING_WIFI) {
+            if (who.interfaceType() == TETHERING_WIFI ||
+                        who.interfaceType() == TETHERING_LOCAL_HOTSPOT_PRIMARY ||
+                        who.interfaceType() == TETHERING_LOCAL_HOTSPOT_SECONDARY) {
                 final WifiManager mgr = getWifiManager();
                 final String iface = who.interfaceName();
                 switch (mode) {
@@ -1790,7 +1812,9 @@ public class Tethering {
 
             // If this is a Wi-Fi interface, tell WifiManager of any errors
             // or the inactive serving state.
-            if (who.interfaceType() == TETHERING_WIFI) {
+            if (who.interfaceType() == TETHERING_WIFI ||
+                        who.interfaceType() == TETHERING_LOCAL_HOTSPOT_PRIMARY ||
+                        who.interfaceType() == TETHERING_LOCAL_HOTSPOT_SECONDARY) {
                 final WifiManager mgr = getWifiManager();
                 final String iface = who.interfaceName();
                 if (mgr == null) {
@@ -1961,6 +1985,9 @@ public class Tethering {
                         final boolean previousUpstreamWanted = updateUpstreamWanted();
                         if (previousUpstreamWanted && !mUpstreamWanted) {
                             mUpstreamNetworkMonitor.setTryCell(false);
+                        }
+                        if (!previousUpstreamWanted && mUpstreamWanted) {
+                            chooseUpstreamType(true);
                         }
                         break;
                     }
@@ -2555,7 +2582,9 @@ public class Tethering {
         }
 
         final PackageManager pm = mContext.getPackageManager();
-        if ((interfaceType == TETHERING_WIFI || interfaceType == TETHERING_WIGIG)
+        if ((interfaceType == TETHERING_WIFI || interfaceType == TETHERING_WIGIG ||
+                interfaceType == TETHERING_LOCAL_HOTSPOT_PRIMARY ||
+                interfaceType == TETHERING_LOCAL_HOTSPOT_SECONDARY)
                 && !pm.hasSystemFeature(PackageManager.FEATURE_WIFI)) {
             mLog.log(iface + " is not tetherable, because WiFi feature is disabled");
             return;
