@@ -28,6 +28,7 @@ import static org.mockito.ArgumentMatchers.anyBoolean;
 import static org.mockito.ArgumentMatchers.anyInt;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.ArgumentMatchers.eq;
+import static org.mockito.Mockito.doAnswer;
 import static org.mockito.Mockito.doReturn;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.reset;
@@ -59,7 +60,6 @@ import com.android.testutils.HandlerUtils;
 
 import org.junit.After;
 import org.junit.Before;
-import org.junit.Ignore;
 import org.junit.Test;
 import org.junit.runner.RunWith;
 import org.mockito.ArgumentCaptor;
@@ -68,6 +68,7 @@ import org.mockito.MockitoAnnotations;
 
 import java.net.InetAddress;
 import java.util.ArrayList;
+import java.util.concurrent.atomic.AtomicBoolean;
 
 @SmallTest
 @RunWith(AndroidJUnit4.class)
@@ -112,7 +113,6 @@ public class EthernetTrackerTest {
     /**
      * Test: Creation of various valid static IP configurations
      */
-    @Ignore("TODO: temporarily ignore tests until prebuilts are updated")
     @Test
     public void createStaticIpConfiguration() {
         // Empty gives default StaticIPConfiguration object
@@ -145,7 +145,6 @@ public class EthernetTrackerTest {
     /**
      * Test: Attempt creation of various bad static IP configurations
      */
-    @Ignore("TODO: temporarily ignore tests until prebuilts are updated")
     @Test
     public void createStaticIpConfiguration_Bad() {
         assertStaticConfigurationFails("ip=192.0.2.1/24 gateway= blah=20.20.20.20");  // Unknown key
@@ -189,7 +188,6 @@ public class EthernetTrackerTest {
     /**
      * Test: Attempt to create a capabilties with various valid sets of capabilities/transports
      */
-    @Ignore("TODO: temporarily ignore tests until prebuilts are updated")
     @Test
     public void createNetworkCapabilities() {
 
@@ -316,7 +314,6 @@ public class EthernetTrackerTest {
                         configTransports).build());
     }
 
-    @Ignore("TODO: temporarily ignore tests until prebuilts are updated")
     @Test
     public void testCreateEthernetTrackerConfigReturnsCorrectValue() {
         final String capabilities = "2";
@@ -333,14 +330,12 @@ public class EthernetTrackerTest {
         assertEquals(transport, config.mTransport);
     }
 
-    @Ignore("TODO: temporarily ignore tests until prebuilts are updated")
     @Test
     public void testCreateEthernetTrackerConfigThrowsNpeWithNullInput() {
         assertThrows(NullPointerException.class,
                 () -> EthernetTracker.createEthernetTrackerConfig(null));
     }
 
-    @Ignore("TODO: temporarily ignore tests until prebuilts are updated")
     @Test
     public void testUpdateConfiguration() {
         final NetworkCapabilities capabilities = new NetworkCapabilities.Builder().build();
@@ -358,7 +353,6 @@ public class EthernetTrackerTest {
                 eq(TEST_IFACE), eq(ipConfig), eq(capabilities), eq(listener));
     }
 
-    @Ignore("TODO: temporarily ignore tests until prebuilts are updated")
     @Test
     public void testConnectNetworkCorrectlyCallsFactory() {
         tracker.connectNetwork(TEST_IFACE, NULL_LISTENER);
@@ -368,7 +362,6 @@ public class EthernetTrackerTest {
                 eq(NULL_LISTENER));
     }
 
-    @Ignore("TODO: temporarily ignore tests until prebuilts are updated")
     @Test
     public void testDisconnectNetworkCorrectlyCallsFactory() {
         tracker.disconnectNetwork(TEST_IFACE, NULL_LISTENER);
@@ -378,7 +371,6 @@ public class EthernetTrackerTest {
                 eq(NULL_LISTENER));
     }
 
-    @Ignore("TODO: temporarily ignore tests until prebuilts are updated")
     @Test
     public void testIsValidTestInterfaceIsFalseWhenTestInterfacesAreNotIncluded() {
         final String validIfaceName = TEST_TAP_PREFIX + "123";
@@ -390,7 +382,6 @@ public class EthernetTrackerTest {
         assertFalse(isValidTestInterface);
     }
 
-    @Ignore("TODO: temporarily ignore tests until prebuilts are updated")
     @Test
     public void testIsValidTestInterfaceIsFalseWhenTestInterfaceNameIsInvalid() {
         final String invalidIfaceName = "123" + TEST_TAP_PREFIX;
@@ -402,7 +393,6 @@ public class EthernetTrackerTest {
         assertFalse(isValidTestInterface);
     }
 
-    @Ignore("TODO: temporarily ignore tests until prebuilts are updated")
     @Test
     public void testIsValidTestInterfaceIsTrueWhenTestInterfacesIncludedAndValidName() {
         final String validIfaceName = TEST_TAP_PREFIX + "123";
@@ -432,7 +422,6 @@ public class EthernetTrackerTest {
         return ifaceParcel;
     }
 
-    @Ignore("TODO: temporarily ignore tests until prebuilts are updated")
     @Test
     public void testListenEthernetStateChange() throws Exception {
         tracker.setIncludeTestInterfaces(true);
@@ -445,7 +434,20 @@ public class EthernetTrackerTest {
         when(mNetd.interfaceGetList()).thenReturn(new String[] {testIface});
         when(mNetd.interfaceGetCfg(eq(testIface))).thenReturn(ifaceParcel);
         doReturn(new String[] {testIface}).when(mFactory).getAvailableInterfaces(anyBoolean());
-        doReturn(EthernetManager.STATE_LINK_UP).when(mFactory).getInterfaceState(eq(testIface));
+
+        final AtomicBoolean ifaceUp = new AtomicBoolean(true);
+        doAnswer(inv -> ifaceUp.get()).when(mFactory).hasInterface(testIface);
+        doAnswer(inv ->
+                ifaceUp.get() ? EthernetManager.STATE_LINK_UP : EthernetManager.STATE_ABSENT)
+                .when(mFactory).getInterfaceState(testIface);
+        doAnswer(inv -> {
+            ifaceUp.set(true);
+            return null;
+        }).when(mFactory).addInterface(eq(testIface), eq(testHwAddr), any(), any());
+        doAnswer(inv -> {
+            ifaceUp.set(false);
+            return null;
+        }).when(mFactory).removeInterface(testIface);
 
         final EthernetStateListener listener = spy(new EthernetStateListener());
         tracker.addListener(listener, true /* canUseRestrictedNetworks */);
@@ -456,7 +458,6 @@ public class EthernetTrackerTest {
         verify(listener).onEthernetStateChanged(eq(EthernetManager.ETHERNET_STATE_ENABLED));
         reset(listener);
 
-        doReturn(EthernetManager.STATE_ABSENT).when(mFactory).getInterfaceState(eq(testIface));
         tracker.setEthernetEnabled(false);
         waitForIdle();
         verify(mFactory).removeInterface(eq(testIface));
@@ -465,7 +466,6 @@ public class EthernetTrackerTest {
                 anyInt(), any());
         reset(listener);
 
-        doReturn(EthernetManager.STATE_LINK_UP).when(mFactory).getInterfaceState(eq(testIface));
         tracker.setEthernetEnabled(true);
         waitForIdle();
         verify(mFactory).addInterface(eq(testIface), eq(testHwAddr), any(), any());
@@ -474,7 +474,6 @@ public class EthernetTrackerTest {
                 anyInt(), any());
     }
 
-    @Ignore("TODO: temporarily ignore tests until prebuilts are updated")
     @Test
     public void testListenEthernetStateChange_unsolicitedEventListener() throws Exception {
         when(mNetd.interfaceGetList()).thenReturn(new String[] {});
